@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"io/ioutil"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -116,7 +118,7 @@ func checkProcStatus(unixMilli string, procName string) []string {
 			continue
 		}
 
-		content := (unixMilli + "," + changeBytes(strings.ReplaceAll(strings.Split(strings.Split(procStatus, "VmSize:\t")[1], "\n")[0], " ", "")) + ",")
+		content := (unixMilli + "," + "0(CPU)" + "," + changeBytes(strings.ReplaceAll(strings.Split(strings.Split(procStatus, "VmSize:\t")[1], "\n")[0], " ", "")) + ",")
 
 		if commands := checkProcCommandFile(pid); commands == nil {
 			continue
@@ -132,9 +134,46 @@ func checkProcStatus(unixMilli string, procName string) []string {
 	return contents
 }
 
+func createFile(path string) {
+	var _, err = os.Stat(path)
+
+	if os.IsNotExist(err) {
+		file, err := os.Create(path)
+		if err != nil {
+			fmt.Println(err.Error())
+			return
+		}
+		defer file.Close()
+
+		file.WriteString("TIME,CPU,MEMORYBYTES,CMD1,CMD2,PID,PPID,USER\n")
+		file.Sync()
+	}
+}
+
+func writeFile(path string, contents []string) {
+	createFile(path)
+
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_APPEND, 0644)
+	if err != nil {
+		fmt.Println(err.Error())
+		return
+	}
+
+	for _, content := range contents {
+		io.WriteString(file, content+"\n")
+	}
+
+	file.Sync()
+	defer file.Close()
+}
+
 func checkProcData(procName string) {
 	contents := checkProcStatus(strconv.FormatInt(time.Now().UnixMilli(), 10), procName)
+	if contents == nil {
+		return
+	}
 
+	writeFile("testFile.csv", contents)
 	fmt.Println(contents)
 }
 
