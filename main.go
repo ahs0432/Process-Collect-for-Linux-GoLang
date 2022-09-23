@@ -121,7 +121,7 @@ func checkProcStatus(unixMilli string, procName string) []string {
 		if commands := checkProcCommandFile(pid); commands == nil {
 			continue
 		} else {
-			content += (commands[0] + "," + commands[1])
+			content += (commands[0] + "," + commands[1] + ",")
 		}
 
 		content += (strings.Split(strings.Split(procStatus, "Pid:\t")[1], "\n")[0] + "," + strings.Split(strings.Split(procStatus, "PPid:\t")[1], "\n")[0] + "," + checkPasswdUser(strings.Split(strings.Split(strings.Split(procStatus, "Uid:\t")[1], "\n")[0], "\t")[1]))
