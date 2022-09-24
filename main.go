@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -95,45 +96,39 @@ func changeBytes(s string) string {
 }
 
 // /proc/[pid]/cmdline 파일 전체 확인 진행
-func checkProcStatus(unixMilli string, procName string) []string {
-	pidList := searchProcList()
-	if len(pidList) == 0 {
-		return nil
+func checkProcStatus(unixMilli string, procName string, pid string, wg *sync.WaitGroup) {
+	procStatusFile, err := ioutil.ReadFile("/proc/" + pid + "/status")
+
+	if err != nil {
+		fmt.Println(err.Error())
+		wg.Done()
+		return
 	}
 
-	contents := []string{}
+	procStatus := string(procStatusFile)
+	procStatusName := strings.Split(strings.Split(procStatus, "Name:\t")[1], "\n")[0]
 
-	for _, pid := range pidList {
-		procStatusFile, err := ioutil.ReadFile("/proc/" + pid + "/status")
-
-		if err != nil {
-			fmt.Println(err.Error())
-			continue
-		}
-
-		procStatus := string(procStatusFile)
-		procStatusName := strings.Split(strings.Split(procStatus, "Name:\t")[1], "\n")[0]
-
-		if procName != procStatusName {
-			continue
-		}
-
-		content := (unixMilli + "," + "0(CPU)" + "," + changeBytes(strings.ReplaceAll(strings.Split(strings.Split(procStatus, "VmSize:\t")[1], "\n")[0], " ", "")) + ",")
-
-		if commands := checkProcCommandFile(pid); commands == nil {
-			continue
-		} else {
-			content += (commands[0] + "," + commands[1] + ",")
-		}
-
-		content += (strings.Split(strings.Split(procStatus, "Pid:\t")[1], "\n")[0] + "," + strings.Split(strings.Split(procStatus, "PPid:\t")[1], "\n")[0] + "," + checkPasswdUser(strings.Split(strings.Split(strings.Split(procStatus, "Uid:\t")[1], "\n")[0], "\t")[1]))
-
-		contents = append(contents, content)
+	if procName != procStatusName {
+		wg.Done()
+		return
 	}
 
-	return contents
+	content := (unixMilli + "," + "0(CPU)" + "," + changeBytes(strings.ReplaceAll(strings.Split(strings.Split(procStatus, "VmSize:\t")[1], "\n")[0], " ", "")) + ",")
+
+	if commands := checkProcCommandFile(pid); commands == nil {
+		wg.Done()
+		return
+	} else {
+		content += (commands[0] + "," + commands[1] + ",")
+	}
+
+	content += (strings.Split(strings.Split(procStatus, "Pid:\t")[1], "\n")[0] + "," + strings.Split(strings.Split(procStatus, "PPid:\t")[1], "\n")[0] + "," + checkPasswdUser(strings.Split(strings.Split(strings.Split(procStatus, "Uid:\t")[1], "\n")[0], "\t")[1]))
+
+	writeFile("testFile.csv", content)
+	wg.Done()
 }
 
+// 파일 존재 여부 확인 후 파일 생성
 func createFile(path string) {
 	var _, err = os.Stat(path)
 
@@ -143,40 +138,60 @@ func createFile(path string) {
 			fmt.Println(err.Error())
 			return
 		}
-		defer file.Close()
 
 		file.WriteString("TIME,CPU,MEMORYBYTES,CMD1,CMD2,PID,PPID,USER\n")
 		file.Sync()
+
+		defer file.Close()
 	}
 }
 
-func writeFile(path string, contents []string) {
-	createFile(path)
-
+// 파일에 내용 추가
+func writeFile(path string, content string) {
 	file, err := os.OpenFile(path, os.O_RDWR|os.O_APPEND, 0644)
 	if err != nil {
 		fmt.Println(err.Error())
 		return
 	}
 
-	for _, content := range contents {
-		io.WriteString(file, content+"\n")
-	}
+	io.WriteString(file, content+"\n")
 
 	file.Sync()
 	defer file.Close()
 }
 
-func checkProcData(procName string) {
-	contents := checkProcStatus(strconv.FormatInt(time.Now().UnixMilli(), 10), procName)
-	if contents == nil {
+func checkProcData(procName string, unixMilli string) {
+	createFile("testFile.csv")
+	pidList := searchProcList()
+	if len(pidList) == 0 {
 		return
 	}
 
-	writeFile("testFile.csv", contents)
-	fmt.Println(contents)
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+		for _, pid := range pidList {
+			wg.Add(1)
+			go checkProcStatus(unixMilli, procName, pid, &wg)
+		}
+	}()
+
+	wg.Wait()
 }
 
 func main() {
-	checkProcData("httpd")
+	// 20 Second
+	repeatTime := 20
+
+	// 무한 루프를 걸어둔 뒤 특정 시점에 도달될 경우 Data Check 함수를 호출함
+	for {
+		time.Sleep(1 * time.Millisecond)
+		unixMilli := time.Now().UnixMilli()
+
+		if unixMilli%(int64(repeatTime)*1000) == 0 {
+			checkProcData("httpd", strconv.FormatInt(unixMilli, 10))
+		}
+	}
 }
