@@ -4,12 +4,28 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
+
+var prevTotalTime int64 = 0
+
+type ConcurrentMap struct {
+	sync.RWMutex
+	items map[string]int64
+}
+
+func (cm *ConcurrentMap) setItem(key string, val int64) {
+	cm.Lock()
+	cm.items[key] = val
+	defer cm.Unlock()
+}
+
+var prevCPUTime ConcurrentMap = ConcurrentMap{items: map[string]int64{}}
 
 // Integer Check
 func isInteger(s string) bool {
@@ -95,8 +111,41 @@ func changeBytes(s string) string {
 	return strconv.Itoa(tmp * multi)
 }
 
+func checkProcStat(pid string, totalTime int64) string {
+	procStatFile, err := ioutil.ReadFile("/proc/" + pid + "/stat")
+
+	if err != nil {
+		fmt.Println(err.Error())
+		return "0"
+	}
+
+	procStat := strings.Split(string(procStatFile), " ")
+	if len(procStat) < 14 {
+		return "0"
+	}
+
+	var cpuTime int64
+
+	if tmpData, err := strconv.ParseInt(procStat[13], 10, 64); err != nil {
+		fmt.Println(err.Error())
+		return "0"
+	} else {
+		cpuTime = tmpData
+	}
+
+	if _, exists := prevCPUTime.items[pid]; !exists {
+		prevCPUTime.setItem(pid, cpuTime)
+		return "0"
+	}
+
+	tmpCPUTime := prevCPUTime.items[pid]
+	prevCPUTime.setItem(pid, cpuTime)
+
+	return strconv.Itoa(int(math.Floor(float64(cpuTime-tmpCPUTime) / float64(totalTime-prevTotalTime) * 100)))
+}
+
 // /proc/[pid]/cmdline 파일 전체 확인 진행
-func checkProcStatus(unixMilli string, procName string, pid string, wg *sync.WaitGroup) {
+func checkProcStatus(unixMilli string, procName string, pid string, totalTime int64, wg *sync.WaitGroup) {
 	procStatusFile, err := ioutil.ReadFile("/proc/" + pid + "/status")
 
 	if err != nil {
@@ -113,7 +162,7 @@ func checkProcStatus(unixMilli string, procName string, pid string, wg *sync.Wai
 		return
 	}
 
-	content := (unixMilli + "," + "0(CPU)" + "," + changeBytes(strings.ReplaceAll(strings.Split(strings.Split(procStatus, "VmSize:\t")[1], "\n")[0], " ", "")) + ",")
+	content := (unixMilli + "," + checkProcStat(pid, totalTime) + "," + changeBytes(strings.ReplaceAll(strings.Split(strings.Split(procStatus, "VmSize:\t")[1], "\n")[0], " ", "")) + ",")
 
 	if commands := checkProcCommandFile(pid); commands == nil {
 		wg.Done()
@@ -126,6 +175,29 @@ func checkProcStatus(unixMilli string, procName string, pid string, wg *sync.Wai
 
 	writeFile("testFile.csv", content)
 	wg.Done()
+}
+
+func checkTotalTime() int64 {
+	procStatFile, err := ioutil.ReadFile("/proc/stat")
+
+	if err != nil {
+		fmt.Println(err.Error())
+		return 0
+	}
+
+	cpuInfo := strings.Split(strings.Split(strings.Split(string(procStatFile), "cpu  ")[1], "\n")[0], " ")
+	totalTime := int64(0)
+
+	for i := 0; i < len(cpuInfo)-1; i++ {
+		tmp, err := strconv.ParseInt(cpuInfo[i], 10, 64)
+		if err != nil {
+			fmt.Println(err.Error())
+			return 0
+		}
+		totalTime += tmp
+	}
+
+	return totalTime
 }
 
 // 파일 존재 여부 확인 후 파일 생성
@@ -167,6 +239,11 @@ func checkProcData(procName string, unixMilli string) {
 		return
 	}
 
+	totalTime := checkTotalTime()
+	if totalTime == 0 {
+		return
+	}
+
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 
@@ -174,11 +251,12 @@ func checkProcData(procName string, unixMilli string) {
 		defer wg.Done()
 		for _, pid := range pidList {
 			wg.Add(1)
-			go checkProcStatus(unixMilli, procName, pid, &wg)
+			go checkProcStatus(unixMilli, procName, pid, totalTime, &wg)
 		}
 	}()
 
 	wg.Wait()
+	prevTotalTime = totalTime
 }
 
 func main() {
