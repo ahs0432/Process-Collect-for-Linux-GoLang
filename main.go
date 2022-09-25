@@ -25,6 +25,14 @@ func (cm *ConcurrentMap) setItem(key string, val int64) {
 	defer cm.Unlock()
 }
 
+func (cm *ConcurrentMap) getItem(key string) (int64, bool) {
+	cm.Lock()
+	val, exist := cm.items[key]
+
+	defer cm.Unlock()
+	return val, exist
+}
+
 var prevCPUTime ConcurrentMap = ConcurrentMap{items: map[string]int64{}}
 
 // Integer Check
@@ -133,12 +141,14 @@ func checkProcStat(pid string, totalTime int64) string {
 		cpuTime = tmpData
 	}
 
-	if _, exists := prevCPUTime.items[pid]; !exists {
+	var tmpCPUTime int64
+	if val, exists := prevCPUTime.getItem(pid); !exists {
 		prevCPUTime.setItem(pid, cpuTime)
 		return "0"
+	} else {
+		tmpCPUTime = val
 	}
 
-	tmpCPUTime := prevCPUTime.items[pid]
 	prevCPUTime.setItem(pid, cpuTime)
 
 	return strconv.Itoa(int(math.Floor(float64(cpuTime-tmpCPUTime) / float64(totalTime-prevTotalTime) * 100)))
